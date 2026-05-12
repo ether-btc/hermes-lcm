@@ -144,6 +144,11 @@ class LCMConfig:
     # Custom instructions injected into all summarization prompts
     custom_instructions: str = ""
 
+    # -- Compression strategy ---
+    # Strategy for context compression: 'llm' (default) or 'cascade'.
+    # Cascade tries cheap compression tiers (RUST, caveman) before expensive LLM summarization.
+    compression_strategy: str = "llm"
+
     # -- Pre-compaction extraction ---
     # Extract decisions/commitments to files before compaction
     extraction_enabled: bool = False
@@ -272,6 +277,8 @@ class LCMConfig:
             "LCM_DOCTOR_CLEAN_APPLY_ENABLED",
             c.doctor_clean_apply_enabled,
         )
+
+        c.compression_strategy = _str("LCM_COMPRESSION_STRATEGY", c.compression_strategy)
 
         raw_ignore = os.environ.get("LCM_IGNORE_SESSION_PATTERNS")
         if raw_ignore is not None:

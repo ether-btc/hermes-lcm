@@ -664,6 +664,75 @@ class LCMEngine(ContextEngine):
 
         raise RuntimeError("adaptive leaf rescue exhausted without a valid chunk")
 
+    def _cascade_compress(
+        self,
+        messages: List[Dict[str, Any]],
+        target_tokens: int,
+    ) -> List[Dict[str, Any]]:
+        """Try Tier 0 (RUST) -> Tier 1 (caveman) -> Tier 2 (LLM) until under budget.
+
+        This implements SYNERGY 5: Multi-Tier Compression Cascade.
+        """
+        current_tokens = count_messages_tokens(messages)
+        if current_tokens <= target_tokens:
+            return messages
+
+        # Tier 0: RUST-CAVE-001 compress (rule-based, no API cost)
+        try:
+            from rust_cave_001 import compress as rust_compress
+            tier0_messages = []
+            for m in messages:
+                content = m.get("content", "")
+                if content:
+                    compressed = rust_compress(content)
+                    m_copy = dict(m)
+                    m_copy["content"] = compressed
+                    tier0_messages.append(m_copy)
+                else:
+                    tier0_messages.append(m)
+            tier0_tokens = count_messages_tokens(tier0_messages)
+            if tier0_tokens <= target_tokens:
+                logger.info(
+                    "Cascade: tier 0 (RUST) met budget: %d -> %d",
+                    current_tokens,
+                    tier0_tokens,
+                )
+                return tier0_messages
+            messages = tier0_messages
+            current_tokens = tier0_tokens
+        except (ImportError, ValueError):
+            pass  # Rust unavailable or text too short for compress()
+
+        # Tier 1: caveman-compression full
+        try:
+            from caveman import compress_text
+            tier1_messages = []
+            for m in messages:
+                content = m.get("content", "")
+                if content:
+                    compressed = compress_text(content, level="full")
+                    m_copy = dict(m)
+                    m_copy["content"] = compressed
+                    tier1_messages.append(m_copy)
+                else:
+                    tier1_messages.append(m)
+            tier1_tokens = count_messages_tokens(tier1_messages)
+            if tier1_tokens <= target_tokens:
+                logger.info(
+                    "Cascade: tier 1 (caveman) met budget: %d -> %d",
+                    current_tokens,
+                    tier1_tokens,
+                )
+                return tier1_messages
+            messages = tier1_messages
+            current_tokens = tier1_tokens
+        except ImportError:
+            pass  # caveman not installed
+
+        # Tier 2: LLM summarization (fallback to current behavior)
+        logger.info("Cascade: falling back to tier 2 (LLM)")
+        return self._assemble_context(messages, target_tokens)
+
     def compress(self, messages: List[Dict[str, Any]],
                  current_tokens: int = None,
                  focus_topic: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -685,6 +754,13 @@ class LCMEngine(ContextEngine):
                 self._thread_context_session_id() or self._session_id or "(unknown)",
             )
             return messages
+
+        # SYNERGY 5: Multi-tier compression cascade
+        if self._config.compression_strategy == "cascade":
+            target_tokens = int(
+                (self._config.context_threshold or 0.75) * self._model_context_length
+            )
+            return self._cascade_compress(messages, target_tokens)
 
         observed_prompt_tokens = current_tokens if current_tokens is not None else None
         force_overflow = self._should_force_overflow_recovery(
