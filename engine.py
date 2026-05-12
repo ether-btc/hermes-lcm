@@ -469,6 +469,60 @@ class LCMEngine(ContextEngine):
             return False
         return tokens >= self.threshold_tokens
 
+    # ── Synergy 1: pre-summarisation text conditioning ────────────────
+    def _preprocess_summary_text(self, text: str) -> str:
+        """Optional: convert passive → active voice before LLM summarisation."""
+        if not self._config.active_voice_preprocess:
+            return text
+        try:
+            from rust_cave_001 import preprocess_text
+            return preprocess_text(text)
+        except ImportError:
+            return text
+        except Exception:
+            return text  # Graceful: malformed text passes through unchanged
+
+    def _preprocess_chunk_messages(
+        self, chunk: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Preprocess each message's text content before serialization.
+
+        Applies rust_cave_001.preprocess_text to prose content fields where
+        passive→active patterns match — before serialization into OpenAI format.
+        """
+        if not self._config.active_voice_preprocess:
+            return chunk
+        result: List[Dict[str, Any]] = []
+        for m in chunk:
+            m_copy = dict(m)
+            content = m_copy.get("content")
+            if isinstance(content, str):
+                try:
+                    from rust_cave_001 import preprocess_text
+                    if content.strip():
+                        m_copy["content"] = preprocess_text(content)
+                except (ImportError, ValueError):
+                    pass
+            elif isinstance(content, list):
+                new_parts = []
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        p_copy = dict(part)
+                        txt = p_copy.get("text", "")
+                        if txt.strip():
+                            try:
+                                from rust_cave_001 import preprocess_text
+                                p_copy["text"] = preprocess_text(txt)
+                            except (ImportError, ValueError):
+                                pass
+                        new_parts.append(p_copy)
+                    else:
+                        new_parts.append(part)
+                m_copy["content"] = new_parts
+            result.append(m_copy)
+        return result
+    # End Synergy 1─────
+
     def should_compress_preflight(self, messages):
         """Pre-flight check — also ingests messages into the store."""
         if self._session_ignored or self._session_stateless or self._thread_context_stateless():
@@ -478,8 +532,14 @@ class LCMEngine(ContextEngine):
                 self._ingest_messages(messages)
             except Exception as e:
                 logger.warning("Ingest during preflight: %s", e)
-        from .tokens import count_messages_tokens
+        from .tokens import count_messages_tokens, estimate_tokens_fast
         rough = count_messages_tokens(messages)
+        # ── Synergy 2: fast token estimate (preflight) ──
+        fast_estimate = estimate_tokens_fast(" ".join(
+            (m.get("content") or "")
+            for m in messages
+            if isinstance(m.get("content"), str)
+        ))
         if self._should_force_overflow_recovery(observed_tokens=rough):
             return True
         if self.threshold_tokens > 0 and rough >= self.threshold_tokens:
@@ -565,6 +625,9 @@ class LCMEngine(ContextEngine):
         while attempt_chunk and attempt_number < max_attempts:
             attempt_number += 1
             source_tokens = count_messages_tokens(attempt_chunk)
+            # ── Synergy 1: preprocess message content before serializing ──
+            if self._config.active_voice_preprocess:
+                attempt_chunk = self._preprocess_chunk_messages(attempt_chunk)
             serialized = self._serialize_messages(attempt_chunk)
             token_budget = max(2000, int(source_tokens * 0.20))
             token_budget = min(token_budget, 12000)
@@ -3027,6 +3090,7 @@ class LCMEngine(ContextEngine):
             # Take the first fanin nodes and condense
             to_condense = uncondensed[:self._config.condensation_fanin]
             combined_text = "\n\n---\n\n".join(n.summary for n in to_condense)
+            combined_text = self._preprocess_summary_text(combined_text)
             source_tokens = sum(n.token_count for n in to_condense)
             token_budget = max(1000, int(source_tokens * 0.40))
 

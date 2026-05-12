@@ -163,6 +163,9 @@ class LCMConfig:
     # Compressor for externalized payloads: 'none', 'lz4', or 'gzip'.
     # 'lz4' requires rust_cave_001; falls back to 'none' if unavailable.
     external_compressor: str = "none"
+    # When enabled, pass text through rust_cave_001.preprocess_text (passive→active)
+    # before LLM summarisation during compaction. Optional, zero-risk transform.
+    active_voice_preprocess: bool = False
     # When enabled, already-externalized summarized tool-result transcript rows may
     # be rewritten to compact GC placeholders after successful leaf compaction.
     large_output_transcript_gc_enabled: bool = False
@@ -249,6 +252,10 @@ class LCMConfig:
         c.external_compressor = _str(
             "LCM_EXTERNAL_COMPRESSOR",
             c.external_compressor,
+        )
+        c.active_voice_preprocess = _parse_bool_env(
+            "LCM_ACTIVE_VOICE_PREPROCESS",
+            c.active_voice_preprocess,
         )
         c.large_output_transcript_gc_enabled = _parse_bool_env(
             "LCM_LARGE_OUTPUT_TRANSCRIPT_GC_ENABLED",

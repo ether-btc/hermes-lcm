@@ -1,9 +1,12 @@
 """Token counting utilities for LCM.
 
 Uses tiktoken when available, falls back to char-based estimate.
+Synergy 2: Optional fast word-boundary token estimate via rust_cave_001
+for preflight compression gate checks.
 """
 
 import logging
+import re
 from typing import Any, Dict, List
 
 from .message_content import normalize_content_value
@@ -11,6 +14,32 @@ from .message_content import normalize_content_value
 logger = logging.getLogger(__name__)
 
 _CHARS_PER_TOKEN = 4
+_encoder = None
+_encoder_checked = False
+
+# ── Synergy 2: fast word-boundary token estimate ──────────────────────
+_rust_word_count = None
+try:
+    from rust_cave_001 import estimate_tokens as _rust_estimate_tokens
+
+    _rust_word_count = _rust_estimate_tokens
+except ImportError:
+    pass
+
+
+def estimate_tokens_fast(text: str) -> int:
+    """Fast token estimate via rust_cave_001 word count, or Python regex fallback.
+
+    Uses a simple ``\\b\\w+\\b`` word-boundary pattern — not tiktoken-accurate,
+    but sub-millisecond and suitable for preflight ``should_compress()`` gates.
+    """
+    if _rust_word_count is not None:
+        return _rust_word_count(text)
+    return len(re.findall(r"\b\w+\b", text))
+
+
+# ── End Synergy 2 ─────────────────────────────────────────────────────
+
 _encoder = None
 _encoder_checked = False
 
