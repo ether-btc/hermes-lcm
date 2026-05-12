@@ -160,6 +160,9 @@ class LCMConfig:
     large_output_externalization_threshold_chars: int = 12_000
     # Explicit storage directory for externalized payloads (empty = auto under hermes home).
     large_output_externalization_path: str = ""
+    # Compressor for externalized payloads: 'none', 'lz4', or 'gzip'.
+    # 'lz4' requires rust_cave_001; falls back to 'none' if unavailable.
+    external_compressor: str = "none"
     # When enabled, already-externalized summarized tool-result transcript rows may
     # be rewritten to compact GC placeholders after successful leaf compaction.
     large_output_transcript_gc_enabled: bool = False
@@ -242,6 +245,10 @@ class LCMConfig:
         c.large_output_externalization_path = _str(
             "LCM_LARGE_OUTPUT_EXTERNALIZATION_PATH",
             c.large_output_externalization_path,
+        )
+        c.external_compressor = _str(
+            "LCM_EXTERNAL_COMPRESSOR",
+            c.external_compressor,
         )
         c.large_output_transcript_gc_enabled = _parse_bool_env(
             "LCM_LARGE_OUTPUT_TRANSCRIPT_GC_ENABLED",

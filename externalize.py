@@ -78,12 +78,29 @@ def get_large_output_storage_dir(config, hermes_home: str = "", *, create: bool)
     return path
 
 
-def _write_externalized_payload(path: Path, payload: Dict[str, Any]) -> None:
+def _write_externalized_payload(path: Path, payload: Dict[str, Any], *, compressor: str = "none") -> None:
+    """Write externalized payload, optionally compressing with LZ4 or gzip."""
     data = json.dumps(payload, ensure_ascii=False, indent=2)
+    raw_bytes = data.encode("utf-8")
+
+    # Determine compressor
+    if compressor == "lz4":
+        try:
+            from rust_cave_001 import my_compress as _lz4_compress
+            raw_bytes = _lz4_compress(raw_bytes, level=9)
+        except ImportError:
+            logging.getLogger(__name__).warning(
+                "LCM lz4 compression skipped: rust_cave_001 not available",
+            )
+            compressor = "none"
+    elif compressor == "gzip":
+        import gzip as _gzip
+        raw_bytes = _gzip.compress(raw_bytes)
+
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(data)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(raw_bytes)
             fd = -1
     finally:
         if fd >= 0:
@@ -160,22 +177,27 @@ def is_externalized_placeholder(text: str) -> bool:
 
 
 def _load_raw_payload(path: Path) -> str | None:
-    """Read a payload file, decompressing if .cz (LZ4) format."""
+    """Read a payload file, decompressing if .cz (LZ4) or gzip-encoded."""
     if not path.exists() or not path.is_file():
         return None
     try:
+        raw_bytes = path.read_bytes()
+        # Detect gzip by magic bytes (1f 8b) regardless of extension
+        if len(raw_bytes) >= 2 and raw_bytes[0:2] == b"\x1f\x8b":
+            import gzip
+            return gzip.decompress(raw_bytes).decode("utf-8")
         if path.suffix == ".cz":
             try:
                 from rust_cave_001 import decompress as _lz4_decompress
-                raw = _lz4_decompress(path.read_bytes())
-                return raw.decode("utf-8")
+                decompressed = _lz4_decompress(raw_bytes)
+                return decompressed.decode("utf-8")
             except ImportError:
                 logging.getLogger(__name__).warning(
                     "Cannot decompress .cz file %s: rust_cave_001 not available", path.name,
                 )
                 return None
-        return path.read_text(encoding="utf-8")
-    except (OSError, ValueError):
+        return raw_bytes.decode("utf-8")
+    except (OSError, ValueError, UnicodeDecodeError):
         return None
 
 
@@ -214,6 +236,7 @@ def reassign_externalized_payloads(
     if not storage_dir.exists() or not storage_dir.is_dir():
         return 0
 
+    compressor = getattr(config, "external_compressor", "none") or "none"
     moved = 0
     for ext_pattern in ("*.json", "*.cz"):
         for path in storage_dir.glob(ext_pattern):
@@ -231,7 +254,7 @@ def reassign_externalized_payloads(
             payload["session_id"] = new_session_id
             tmp_path = path.with_name(f"{path.name}.tmp")
             try:
-                _write_externalized_payload(tmp_path, payload)
+                _write_externalized_payload(tmp_path, payload, compressor=compressor)
                 tmp_path.replace(path)
             except OSError as exc:
                 logger.warning("Externalized payload session reassignment skipped for %s: %s", path.name, exc)
@@ -330,7 +353,7 @@ def externalize_ingest_payload(
         "created_at": time.time(),
     }
     try:
-        _write_externalized_payload(path, payload)
+        _write_externalized_payload(path, payload, compressor=getattr(config, "external_compressor", "none") or "none")
     except OSError as exc:
         logger.warning("LCM ingest payload externalization skipped (non-blocking): %s", exc)
         return None
@@ -438,7 +461,7 @@ def maybe_externalize_payload(
         "created_at": time.time(),
     }
     try:
-        _write_externalized_payload(path, payload)
+        _write_externalized_payload(path, payload, compressor=getattr(config, "external_compressor", "none") or "none")
     except OSError as exc:
         logger.warning("Large payload externalization skipped (non-blocking): %s", exc)
         return None
