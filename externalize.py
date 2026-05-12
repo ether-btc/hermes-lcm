@@ -159,6 +159,26 @@ def is_externalized_placeholder(text: str) -> bool:
     return bool(_EXTERNALIZED_REF_RE.fullmatch(stripped))
 
 
+def _load_raw_payload(path: Path) -> str | None:
+    """Read a payload file, decompressing if .cz (LZ4) format."""
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        if path.suffix == ".cz":
+            try:
+                from rust_cave_001 import decompress as _lz4_decompress
+                raw = _lz4_decompress(path.read_bytes())
+                return raw.decode("utf-8")
+            except ImportError:
+                logging.getLogger(__name__).warning(
+                    "Cannot decompress .cz file %s: rust_cave_001 not available", path.name,
+                )
+                return None
+        return path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return None
+
+
 def load_externalized_payload(ref: str, *, config, hermes_home: str = "") -> Dict[str, Any] | None:
     if not ref or Path(ref).name != ref:
         return None
@@ -169,7 +189,10 @@ def load_externalized_payload(ref: str, *, config, hermes_home: str = "") -> Dic
     if not path.exists() or not path.is_file():
         return None
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        raw = _load_raw_payload(path)
+        if raw is None:
+            return None
+        payload = json.loads(raw)
     except (OSError, json.JSONDecodeError):
         return None
     summary = _externalized_summary(path, payload)
@@ -192,28 +215,32 @@ def reassign_externalized_payloads(
         return 0
 
     moved = 0
-    for path in storage_dir.glob("*.json"):
-        if not path.is_file():
-            continue
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if (payload.get("session_id") or "") != old_session_id:
-            continue
-        payload["session_id"] = new_session_id
-        tmp_path = path.with_name(f"{path.name}.tmp")
-        try:
-            _write_externalized_payload(tmp_path, payload)
-            tmp_path.replace(path)
-        except OSError as exc:
-            logger.warning("Externalized payload session reassignment skipped for %s: %s", path.name, exc)
+    for ext_pattern in ("*.json", "*.cz"):
+        for path in storage_dir.glob(ext_pattern):
+            if not path.is_file():
+                continue
             try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            continue
-        moved += 1
+                raw_text = _load_raw_payload(path)
+                if raw_text is None:
+                    continue
+                payload = json.loads(raw_text)
+            except (OSError, json.JSONDecodeError):
+                continue
+            if (payload.get("session_id") or "") != old_session_id:
+                continue
+            payload["session_id"] = new_session_id
+            tmp_path = path.with_name(f"{path.name}.tmp")
+            try:
+                _write_externalized_payload(tmp_path, payload)
+                tmp_path.replace(path)
+            except OSError as exc:
+                logger.warning("Externalized payload session reassignment skipped for %s: %s", path.name, exc)
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                continue
+            moved += 1
     return moved
 
 
@@ -234,11 +261,17 @@ def find_externalized_payload_for_message(
         return None
 
     digest_prefix = _content_digest_prefix(content)
-    candidates = sorted(storage_dir.glob(f"*_{digest_prefix}_*.json"))
+    candidates: list[Path] = []
+    for ext_pattern in ("*.json", "*.cz"):
+        candidates.extend(storage_dir.glob(f"*_{digest_prefix}_{ext_pattern}"))
+    candidates.sort()
     fallback_match = None
     for path in candidates:
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            raw_text = _load_raw_payload(path)
+            if raw_text is None:
+                continue
+            payload = json.loads(raw_text)
         except (OSError, json.JSONDecodeError):
             continue
         if kind is not None and payload.get("kind", "tool_result") != kind:

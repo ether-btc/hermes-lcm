@@ -814,6 +814,34 @@ class LCMEngine(ContextEngine):
                     recovery_assembly_cap,
                     count_messages_tokens(compressed),
                 )
+
+        # ── Synergy 4: post-compression quality audit (optional) ──────────
+        try:
+            from .synergy.quality_audit import audit_quality, log_audit_result
+            # Extract original user text that was compacted
+            original_text = " ".join(
+                m.get("content", "")
+                for m in working_messages
+                if m.get("role") == "user"
+                and isinstance(m.get("content"), str)
+            )
+            summary_text = ""
+            if compressed and len(compressed) > 0:
+                last = compressed[-1]
+                ct = last.get("content", "")
+                if isinstance(ct, str):
+                    summary_text = ct
+                elif isinstance(ct, list):
+                    for part in ct:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            summary_text += part.get("text", "")
+            if original_text and summary_text:
+                audit = audit_quality(original_text, summary_text)
+                log_audit_result(audit, logger)
+        except ImportError:
+            pass  # caveman not installed — audit skipped
+        # ── End Synergy 4 ───────────────────────────────────────────────
+
         # Reset cursor to the length of the compressed context so that
         # only messages appended *after* this point get ingested next time.
         self._ingest_cursor = len(compressed)
