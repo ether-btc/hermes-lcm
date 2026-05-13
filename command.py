@@ -105,6 +105,24 @@ def _status_text(engine) -> str:
     session_bound = bool(engine.current_session_id)
     source_stats = status.get("source_lineage") or {}
     runtime_identity = status.get("runtime_identity") or {}
+
+    # Auto-derive conversation_id when gateway omits it or mirrors session_id
+    # Fixes https://github.com/stephenschoettler/hermes-lcm/issues/133
+    current_conv_id = runtime_identity.get('conversation_id')
+    if current_conv_id is None or current_conv_id == '' or current_conv_id == engine.current_session_id:
+        platform = engine.current_session_platform or 'unknown'
+        if platform == 'discord':
+            guild_id = runtime_identity.get('guild_id', 'unknown')
+            channel_id = runtime_identity.get('channel_id', 'unknown')
+            user_id = runtime_identity.get('user_id', 'unknown')
+            current_conv_id = f"discord:{guild_id}:{channel_id}:{user_id}"
+        elif platform == 'telegram':
+            chat_id = runtime_identity.get('chat_id', 'unknown')
+            current_conv_id = f"telegram:{chat_id}"
+        else:
+            current_conv_id = f"{platform}:{engine.current_session_id}"
+        runtime_identity['conversation_id'] = current_conv_id
+
     source_stats = {
         "messages_total": int(source_stats.get("messages_total", 0) or 0),
         "attributed_messages": int(source_stats.get("attributed_messages", 0) or 0),
