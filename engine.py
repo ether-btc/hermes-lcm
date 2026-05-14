@@ -881,12 +881,42 @@ class LCMEngine(ContextEngine):
 
     # -- ContextEngine optional methods ------------------------------------
 
+    def _derive_conversation_id(self, session_id: str, kwargs: Dict[str, Any]) -> str:
+        """Derive a conversation_id from platform metadata when gateway doesn't provide one.
+
+        Called when the gateway passes conversation_id equal to session_id or None
+        (the common case for Telegram multi-session scenarios). Derives the real
+        conversation identifier from platform-level metadata passed in kwargs.
+
+        Returns the derived conversation_id or session_id as fallback.
+        """
+        explicit = kwargs.get("conversation_id")
+        if explicit and explicit != session_id:
+            return explicit
+        platform = str(kwargs.get("platform") or self._session_platform or "")
+        if platform == "telegram":
+            chat_id = kwargs.get("chat_id")
+            if chat_id:
+                return f"telegram:{chat_id}"
+        elif platform == "discord":
+            guild_id = kwargs.get("guild_id")
+            channel_id = kwargs.get("channel_id")
+            user_id = kwargs.get("user_id")
+            if guild_id and channel_id:
+                identifier = f"discord:{guild_id}:{channel_id}"
+                if user_id:
+                    identifier += f":{user_id}"
+                return identifier
+        return session_id
+
     def _bind_lifecycle_state(
         self,
         session_id: str,
         *,
         conversation_id: str | None = None,
     ) -> None:
+        if not conversation_id or conversation_id == session_id:
+            conversation_id = self._derive_conversation_id(session_id, {})
         state = self._lifecycle.bind_session(session_id, conversation_id=conversation_id)
         self._conversation_id = state.conversation_id
         self._last_compacted_store_id = state.current_frontier_store_id
@@ -1513,9 +1543,15 @@ class LCMEngine(ContextEngine):
             self._finalize_pending_reset_boundary(previous_session_id)
             self._reset_session_scoped_runtime_state()
             self._apply_session_start_metadata(session_id, kwargs)
+            # Derive conversation_id when gateway omits or mirrors session_id
+            explicit_conv_id = kwargs.get("conversation_id")
+            if not explicit_conv_id or explicit_conv_id == session_id:
+                derived_conv_id = self._derive_conversation_id(session_id, kwargs)
+            else:
+                derived_conv_id = explicit_conv_id
             self._bind_lifecycle_state(
                 session_id,
-                conversation_id=kwargs.get("conversation_id"),
+                conversation_id=derived_conv_id,
             )
             self._clear_pending_reset_boundary()
             self._log_session_filter_diagnostics()
@@ -1574,9 +1610,15 @@ class LCMEngine(ContextEngine):
             self._last_overflow_recovery_failed = False
             self._last_condensation_suppressed_reason = ""
         self._apply_session_start_metadata(session_id, kwargs)
+        # Derive conversation_id when gateway omits or mirrors session_id
+        explicit_conv_id = kwargs.get("conversation_id")
+        if not explicit_conv_id or explicit_conv_id == session_id:
+            derived_conv_id = self._derive_conversation_id(session_id, kwargs)
+        else:
+            derived_conv_id = explicit_conv_id
         self._bind_lifecycle_state(
             session_id,
-            conversation_id=kwargs.get("conversation_id"),
+            conversation_id=derived_conv_id,
         )
         self._schedule_ingest_cursor_reconciliation()
         self._log_session_filter_diagnostics()
