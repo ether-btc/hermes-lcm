@@ -335,9 +335,10 @@ class TestProviderPrefixedAuxiliaryCalls:
 class TestConfig:
     def test_defaults(self):
         c = LCMConfig()
-        assert c.fresh_tail_count == 64
+        assert c.fresh_tail_count == 32
         assert c.leaf_chunk_tokens == 20_000
-        assert c.context_threshold == 0.75
+        assert c.context_threshold == 0.35
+        assert c.incremental_max_depth == 3
         assert c.condensation_fanin == 4
         assert c.dynamic_leaf_chunk_enabled is False
         assert c.dynamic_leaf_chunk_max == 40_000
@@ -434,9 +435,9 @@ class TestConfig:
 
         c = LCMConfig.from_env()
 
-        assert c.fresh_tail_count == 64
+        assert c.fresh_tail_count == 32
         assert c.leaf_chunk_tokens == 20_000
-        assert c.context_threshold == 0.75
+        assert c.context_threshold == 0.35
         assert c.max_assembly_tokens == 0
         assert c.reserve_tokens_floor == 0
         assert c.expansion_context_tokens == 32_000
@@ -452,6 +453,21 @@ class TestConfig:
         c = LCMConfig.from_env()
 
         assert c.context_threshold == 0.68
+
+    def test_from_env_lcm_section_overrides_compression_section(self, monkeypatch, tmp_path):
+        """lcm.context_threshold takes priority over compression.threshold."""
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "compression:\n  threshold: 0.68\n"
+            "lcm:\n  context_threshold: 0.45\n"
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.delenv("LCM_CONTEXT_THRESHOLD", raising=False)
+
+        c = LCMConfig.from_env()
+
+        assert c.context_threshold == 0.45
 
     def test_from_env_lcm_threshold_env_overrides_hermes_config(self, monkeypatch, tmp_path):
         hermes_home = tmp_path / "hermes"

@@ -46,7 +46,10 @@ def _parse_bool_env(key: str, default: bool) -> bool:
 
 
 def _hermes_compression_threshold(default: float) -> float:
-    """Read Hermes compression.threshold when no LCM env override is present.
+    """Read Hermes compression.threshold or lcm.context_threshold from config.yaml.
+
+    Priority: LCM_CONTEXT_THRESHOLD env var > lcm.context_threshold (config.yaml)
+              > compression.threshold (config.yaml) > default.
 
     Hermes gateways may load ``~/.hermes/config.yaml`` without exporting every
     setting into the process environment. Falling back to the main Hermes
@@ -59,19 +62,28 @@ def _hermes_compression_threshold(default: float) -> float:
         text = cfg_path.read_text()
         if yaml is not None:
             cfg = yaml.safe_load(text) or {}
-            value = (cfg.get("compression") or {}).get("threshold")
-            if value is None:
-                return default
-            return float(value)
+            # lcm.context_threshold takes priority over compression.threshold
+            lcm_val = (cfg.get("lcm") or {}).get("context_threshold")
+            if lcm_val is not None:
+                return float(lcm_val)
+            comp_val = (cfg.get("compression") or {}).get("threshold")
+            if comp_val is not None:
+                return float(comp_val)
+            return default
 
+        in_lcm = False
         in_compression = False
         for raw_line in text.splitlines():
             line = raw_line.split("#", 1)[0].rstrip()
             if not line.strip():
                 continue
             if not line.startswith((" ", "\t")):
-                in_compression = line.strip() == "compression:"
+                stripped = line.strip()
+                in_lcm = stripped == "lcm:"
+                in_compression = stripped == "compression:"
                 continue
+            if in_lcm and line.strip().startswith("context_threshold:"):
+                return float(line.split(":", 1)[1].strip().strip("'\""))
             if in_compression and line.strip().startswith("threshold:"):
                 return float(line.split(":", 1)[1].strip().strip("'\""))
         return default
@@ -84,15 +96,15 @@ class LCMConfig:
     """All tunables for the LCM engine."""
 
     # -- Fresh tail: recent messages never compacted ---
-    fresh_tail_count: int = 64
+    fresh_tail_count: int = 32
 
     # -- Compaction thresholds ---
     # Max source tokens in a leaf chunk before summarization triggers
     leaf_chunk_tokens: int = 20_000
     # Fraction of context window that triggers compaction (0.0–1.0)
-    context_threshold: float = 0.75
+    context_threshold: float = 0.35
     # Max condensation depth (-1 = unlimited, 0 = leaf only)
-    incremental_max_depth: int = 1
+    incremental_max_depth: int = 3
     # How many same-depth summaries trigger condensation
     condensation_fanin: int = 4
     # When enabled, leaf compaction may use a larger working chunk size based on backlog pressure
