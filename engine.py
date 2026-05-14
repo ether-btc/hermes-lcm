@@ -881,14 +881,21 @@ class LCMEngine(ContextEngine):
 
     # -- ContextEngine optional methods ------------------------------------
 
-    def _derive_conversation_id(self, session_id: str, kwargs: Dict[str, Any]) -> str:
+    def _derive_conversation_id(self, session_id: str, kwargs: Dict[str, Any], *, fallback_to_session: bool = True) -> str | None:
         """Derive a conversation_id from platform metadata when gateway doesn't provide one.
 
         Called when the gateway passes conversation_id equal to session_id or None
         (the common case for Telegram multi-session scenarios). Derives the real
         conversation identifier from platform-level metadata passed in kwargs.
 
-        Returns the derived conversation_id or session_id as fallback.
+        Args:
+            session_id: The session_id to use as final fallback.
+            kwargs: Keyword arguments from the original call (may be empty dict).
+            fallback_to_session: If True, return session_id when no platform data found.
+                                 If False, return None (caller handles None explicitly).
+
+        Returns:
+            The derived conversation_id, session_id, or None.
         """
         explicit = kwargs.get("conversation_id")
         if explicit and explicit != session_id:
@@ -907,7 +914,7 @@ class LCMEngine(ContextEngine):
                 if user_id:
                     identifier += f":{user_id}"
                 return identifier
-        return session_id
+        return session_id if fallback_to_session else None
 
     def _bind_lifecycle_state(
         self,
