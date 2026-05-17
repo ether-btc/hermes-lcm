@@ -944,20 +944,42 @@ class LCMEngine(ContextEngine):
         explicit = kwargs.get("conversation_id")
         if explicit and explicit != session_id:
             return explicit
+        
         platform = str(kwargs.get("platform") or self._session_platform or "")
+        
         if platform == "telegram":
             chat_id = kwargs.get("chat_id")
-            if chat_id:
+            if not chat_id:
+                return session_id if fallback_to_session else None
+            
+            # Include topic/thread discriminator if available
+            thread_id = kwargs.get("message_thread_id")
+            if thread_id:
+                return f"telegram:{chat_id}:{thread_id}"
+            else:
                 return f"telegram:{chat_id}"
+        
         elif platform == "discord":
             guild_id = kwargs.get("guild_id")
             channel_id = kwargs.get("channel_id")
+            if not guild_id or not channel_id:
+                return session_id if fallback_to_session else None
+            
+            # Build base identifier
+            identifier = f"discord:{guild_id}:{channel_id}"
+            
+            # Include user_id if available
             user_id = kwargs.get("user_id")
-            if guild_id and channel_id:
-                identifier = f"discord:{guild_id}:{channel_id}"
-                if user_id:
-                    identifier += f":{user_id}"
-                return identifier
+            if user_id:
+                identifier += f":{user_id}"
+            
+            # Include thread discriminator if available
+            thread_id = kwargs.get("thread_id")
+            if thread_id:
+                identifier += f":{thread_id}"
+            
+            return identifier
+        
         return session_id if fallback_to_session else None
 
     def _bind_lifecycle_state(
