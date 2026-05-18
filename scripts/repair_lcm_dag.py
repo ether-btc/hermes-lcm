@@ -133,13 +133,17 @@ def report_state(conn) -> None:
     ).fetchone()[0]
     print(f"\n  Sessions with nodes: {sessions_with_nodes}/{total_sessions}")
 
+    # Check for truly orphaned sessions (no lifecycle reference in any field)
     orphan = conn.execute("""
         SELECT COUNT(DISTINCT sn.session_id)
         FROM summary_nodes sn
-        LEFT JOIN lcm_lifecycle_state lcs ON lcs.conversation_id = sn.session_id
-        WHERE lcs.conversation_id IS NULL
+        LEFT JOIN lcm_lifecycle_state lcs 
+            ON lcs.conversation_id = sn.session_id
+            OR lcs.current_session_id = sn.session_id
+            OR lcs.last_finalized_session_id = sn.session_id
+        WHERE lcs.rowid IS NULL
     """).fetchone()[0]
-    print(f"  Sessions with nodes but NO lifecycle entry: {orphan}")
+    print(f"  Sessions with nodes but NO lifecycle reference: {orphan}")
 
 
 def main() -> None:
