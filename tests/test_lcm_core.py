@@ -425,6 +425,7 @@ class TestConfig:
         assert c.fresh_tail_count == 32
         assert c.leaf_chunk_tokens == 20_000
         assert c.context_threshold == 0.35
+        assert c.incremental_max_depth == 3
         assert c.condensation_fanin == 4
         assert c.dynamic_leaf_chunk_enabled is False
         assert c.dynamic_leaf_chunk_max == 40_000
