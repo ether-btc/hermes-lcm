@@ -92,7 +92,9 @@ def _hermes_compression_threshold(default: float) -> float:
             return default
 
         in_lcm = False
+        lcm_indent = None
         in_compression = False
+        comp_indent = None
         compression_disabled = False
         threshold_value = None
         for raw_line in text.splitlines():
@@ -103,17 +105,29 @@ def _hermes_compression_threshold(default: float) -> float:
                 stripped = line.strip()
                 in_lcm = stripped == "lcm:"
                 in_compression = stripped == "compression:"
+                lcm_indent = None
+                comp_indent = None
                 continue
-            if in_lcm and line.strip().startswith("context_threshold:"):
-                return float(line.split(":", 1)[1].strip().strip("'\""))
+            indent = len(line) - len(line.lstrip(" \t"))
+            if in_lcm:
+                if lcm_indent is None:
+                    lcm_indent = indent
+                if indent == lcm_indent and ":" in line:
+                    key, raw_value = line.strip().split(":", 1)
+                    if key == "context_threshold":
+                        return float(raw_value.strip().strip("'\""))
+                continue
             if in_compression:
-                key_part = line.strip()
-                if key_part.startswith("enabled:"):
-                    raw_val = key_part.split(":", 1)[1].strip().strip("'\"")
-                    if _config_bool_disabled(raw_val):
-                        compression_disabled = True
-                elif key_part.startswith("threshold:"):
-                    threshold_value = line.split(":", 1)[1].strip().strip("'\"")
+                if comp_indent is None:
+                    comp_indent = indent
+                if indent != comp_indent or ":" not in line:
+                    continue
+                key, raw_value = line.strip().split(":", 1)
+                value = raw_value.strip().strip("'\"")
+                if key == "enabled" and _config_bool_disabled(value):
+                    compression_disabled = True
+                elif key == "threshold":
+                    threshold_value = value
         if compression_disabled or threshold_value is None:
             return default
         return float(threshold_value)

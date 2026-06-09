@@ -775,6 +775,47 @@ class TestConfig:
 
         assert c.context_threshold == 0.42
 
+    def test_from_env_nested_lcm_context_threshold_ignored(self, monkeypatch, tmp_path):
+        """Deeply nested context_threshold under lcm: should NOT be matched.
+
+        Regression test: the no-yaml fallback parser must track indentation
+        so that only direct children of the lcm: section are considered.
+        """
+        import hermes_lcm.config as config_mod
+
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+        # context_threshold nested under lcm > subsection — must be ignored
+        (hermes_home / "config.yaml").write_text(
+            "lcm:\n  subsection:\n    context_threshold: 0.99\n"
+            "compression:\n  enabled: true\n  threshold: 0.60\n"
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.delenv("LCM_CONTEXT_THRESHOLD", raising=False)
+        monkeypatch.setattr(config_mod, "yaml", None)
+
+        c = LCMConfig.from_env()
+
+        # Must fall through to compression.threshold, NOT the nested 0.99
+        assert c.context_threshold == 0.60
+
+    def test_from_env_nested_compression_threshold_ignored(self, monkeypatch, tmp_path):
+        """Deeply nested threshold under compression: should NOT be matched."""
+        import hermes_lcm.config as config_mod
+
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "compression:\n  enabled: true\n  subsection:\n    threshold: 0.99\n  threshold: 0.55\n"
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.delenv("LCM_CONTEXT_THRESHOLD", raising=False)
+        monkeypatch.setattr(config_mod, "yaml", None)
+
+        c = LCMConfig.from_env()
+
+        assert c.context_threshold == 0.55
+
 
 class TestSessionPatterns:
     def test_compile_pattern_wildcards(self):
