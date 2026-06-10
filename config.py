@@ -93,6 +93,24 @@ def _safe_finite_float(value, default: float, source: str) -> float:
     return coerced
 
 
+def _safe_positive_float(value, default: float, source: str) -> float:
+    """Coerce a YAML/env value to a finite POSITIVE float, warning on bad input.
+
+    Used for timeout values where negative or zero would be a footgun (a caller
+    using the result as a deadline would either spin or time out instantly).
+    """
+    coerced = _safe_finite_float(value, default, source)
+    if coerced <= 0:
+        _log.warning(
+            "config: ignoring non-positive %s=%r (must be > 0); using default %.3f",
+            source,
+            value,
+            default,
+        )
+        return default
+    return coerced
+
+
 def _hermes_compression_threshold(default: float) -> float:
     """Read lcm.context_threshold or Hermes compression.threshold from config.yaml.
 
@@ -186,13 +204,18 @@ def _hermes_auxiliary_compression_timeout_ms(default: int) -> int:
     try:
         text = cfg_path.read_text()
         if yaml is not None:
-            cfg = yaml.safe_load(text) or {}
+            cfg = yaml.safe_load(text)
+            if not isinstance(cfg, dict):
+                return default
             auxiliary = cfg.get("auxiliary") or {}
             compression = auxiliary.get("compression") or {}
             value = compression.get("timeout")
             if value is None:
                 return default
-            return int(float(value) * 1000)
+            seconds = _safe_positive_float(
+                value, default / 1000.0, "auxiliary.compression.timeout"
+            )
+            return int(seconds * 1000)
 
         in_auxiliary = False
         in_compression = False
@@ -230,9 +253,15 @@ def _hermes_auxiliary_compression_timeout_ms(default: int) -> int:
                 continue
             key, raw_value = stripped.split(":", 1)
             if key == "timeout":
-                return int(float(raw_value.strip().strip("'\"")) * 1000)
+                seconds = _safe_positive_float(
+                    raw_value.strip().strip("'\""),
+                    default / 1000.0,
+                    "auxiliary.compression.timeout",
+                )
+                return int(seconds * 1000)
         return default
-    except Exception:
+    except (OSError, ValueError, TypeError) as exc:
+        _log.debug("config: falling back to default %.3f (parse error: %s)", default, exc)
         return default
 
 

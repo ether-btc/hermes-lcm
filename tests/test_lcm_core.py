@@ -917,6 +917,87 @@ class TestConfig:
 
         assert c.context_threshold == 0.30, f"got {c.context_threshold}"
 
+    def test_from_env_auxiliary_timeout_negative_falls_back(self, monkeypatch, tmp_path):
+        """X3 regression: auxiliary.compression.timeout: -1 must NOT propagate.
+
+        The original code at config.py:233 had an operator-precedence bug
+        (``int(float(s * 1000))`` was actually ``int(float(s) * 1000)`` where
+        ``s * 1000`` is string repetition, not float multiplication). The
+        cycle 3 fix replaces it with a positive-finite helper.
+        """
+        import hermes_lcm.config as config_mod
+
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "auxiliary:\n  compression:\n    timeout: -1\n"
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setattr(config_mod, "yaml", None)
+
+        val = config_mod._hermes_auxiliary_compression_timeout_ms(5000)
+        assert val == 5000, (
+            f"negative timeout propagated as {val}. "
+            "BUG: should fall back to default on non-positive timeouts."
+        )
+
+    def test_from_env_auxiliary_timeout_zero_falls_back(self, monkeypatch, tmp_path):
+        """X3 regression: zero timeout also falls back (would cause instant timeout)."""
+        import hermes_lcm.config as config_mod
+
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "auxiliary:\n  compression:\n    timeout: 0\n"
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setattr(config_mod, "yaml", None)
+
+        val = config_mod._hermes_auxiliary_compression_timeout_ms(5000)
+        assert val == 5000, f"zero timeout propagated as {val}"
+
+    def test_from_env_auxiliary_timeout_inf_falls_back_with_warning(self, monkeypatch, tmp_path, caplog):
+        """X3 regression: inf should warn and fall back to default."""
+        import logging
+
+        import hermes_lcm.config as config_mod
+
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "auxiliary:\n  compression:\n    timeout: inf\n"
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setattr(config_mod, "yaml", None)
+
+        with caplog.at_level(logging.WARNING, logger="hermes_lcm.config"):
+            val = config_mod._hermes_auxiliary_compression_timeout_ms(5000)
+        assert val == 5000
+        assert any("non-finite" in rec.message for rec in caplog.records), (
+            "Expected a 'non-finite' warning, got: "
+            + ", ".join(rec.message for rec in caplog.records)
+        )
+
+    def test_from_env_auxiliary_timeout_positive_parses_correctly(self, monkeypatch, tmp_path):
+        """X3 regression (positive case): a valid positive timeout parses to seconds*1000 ms.
+
+        This also pins the operator-precedence fix: the original code did
+        ``float(string * 1000)`` (string repetition) and always returned
+        default. The fix does ``int(float_value * 1000)``.
+        """
+        import hermes_lcm.config as config_mod
+
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "auxiliary:\n  compression:\n    timeout: 5\n"
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setattr(config_mod, "yaml", None)
+
+        val = config_mod._hermes_auxiliary_compression_timeout_ms(5000)
+        assert val == 5000, f"got {val}, expected 5000 (5s * 1000)"
+
 
 class TestSessionPatterns:
     def test_compile_pattern_wildcards(self):
