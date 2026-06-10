@@ -1,4 +1,6 @@
 """LCM configuration with defaults and env var overrides."""
+import logging
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -7,6 +9,8 @@ try:
     import yaml
 except Exception:  # pragma: no cover - optional fallback for minimal installs
     yaml = None
+
+_log = logging.getLogger("hermes_lcm.config")
 
 
 def _parse_pattern_list(raw: str) -> list[str]:
@@ -61,6 +65,34 @@ def _config_bool_disabled(value) -> bool:
     return False
 
 
+def _safe_finite_float(value, default: float, source: str) -> float:
+    """Coerce a YAML/env value to a finite float, warning on non-finite or unparseable input.
+
+    The fallback parser accepts arbitrary user input from config.yaml. ``inf``
+    and ``nan`` are valid Python floats but would silently disable LCM
+    compaction (or any other downstream check that uses ``<``/``>``). Garbage
+    strings raise ValueError; the broad ``except`` in callers would swallow
+    them silently. Centralising the validation here means every caller gets
+    the same finite-only guarantee and the same warning log.
+    """
+    if value is None:
+        return default
+    try:
+        coerced = float(value)
+    except (TypeError, ValueError):
+        _log.warning("config: ignoring non-numeric %s=%r; using default %.3f", source, value, default)
+        return default
+    if not math.isfinite(coerced):
+        _log.warning(
+            "config: ignoring non-finite %s=%r (inf/nan would disable LCM compaction); using default %.3f",
+            source,
+            value,
+            default,
+        )
+        return default
+    return coerced
+
+
 def _hermes_compression_threshold(default: float) -> float:
     """Read lcm.context_threshold or Hermes compression.threshold from config.yaml.
 
@@ -78,17 +110,18 @@ def _hermes_compression_threshold(default: float) -> float:
     try:
         text = cfg_path.read_text()
         if yaml is not None:
-            cfg = yaml.safe_load(text) or {}
-            # lcm.context_threshold takes priority over compression.threshold
+            cfg = yaml.safe_load(text)
+            if not isinstance(cfg, dict):
+                return default
             lcm_val = (cfg.get("lcm") or {}).get("context_threshold")
             if lcm_val is not None:
-                return float(lcm_val)
+                return _safe_finite_float(lcm_val, default, "lcm.context_threshold")
             compression = cfg.get("compression") or {}
             if _config_bool_disabled(compression.get("enabled")):
                 return default
             comp_val = compression.get("threshold")
             if comp_val is not None:
-                return float(comp_val)
+                return _safe_finite_float(comp_val, default, "compression.threshold")
             return default
 
         in_lcm = False
@@ -115,7 +148,11 @@ def _hermes_compression_threshold(default: float) -> float:
                 if indent == lcm_indent and ":" in line:
                     key, raw_value = line.strip().split(":", 1)
                     if key == "context_threshold":
-                        return float(raw_value.strip().strip("'\""))
+                        return _safe_finite_float(
+                            raw_value.strip().strip("'\""),
+                            default,
+                            "lcm.context_threshold",
+                        )
                 continue
             if in_compression:
                 if comp_indent is None:
@@ -130,8 +167,9 @@ def _hermes_compression_threshold(default: float) -> float:
                     threshold_value = value
         if compression_disabled or threshold_value is None:
             return default
-        return float(threshold_value)
-    except Exception:
+        return _safe_finite_float(threshold_value, default, "compression.threshold")
+    except (OSError, ValueError, TypeError) as exc:
+        _log.debug("config: falling back to default %.3f (parse error: %s)", default, exc)
         return default
 
 
@@ -211,6 +249,9 @@ class LCMConfig:
     # Fraction of context window that triggers compaction (0.0–1.0)
     context_threshold: float = 0.35
     # Max condensation depth (-1 = unlimited, 0 = leaf only)
+    # NOTE: changed from 1 to 3 in v0.17.0. The 3 enables hierarchical
+    # summarization (L1 -> L2 -> L3). Users on the old leaf-only behavior
+    # can set LCM_INCREMENTAL_MAX_DEPTH=1 to keep it.
     incremental_max_depth: int = 3
     # How many same-depth summaries trigger condensation
     condensation_fanin: int = 4

@@ -383,14 +383,33 @@ What the main knobs do:
 
 Common questions:
 
-**Should I leave the default threshold on a 1M-token model?**
+**Should I change leaf chunk settings first?**
 
 Not always. The default `0.35` means compaction starts around `350000` prompt
 tokens on a true 1M effective window. That leaves far more headroom for new
 content but compacts more aggressively, which can shorten recall of older
 details.
 
-**Should I change leaf chunk settings first?**
+## User-visible changes in v0.17.0 (default-value migration guide)
+
+If you are upgrading from v0.16.1 or earlier, the following defaults changed.
+You can pin to the old behavior via env var or `lcm:` section in `config.yaml`.
+
+| Setting                    | v0.16.1 | v0.17.0 | How to pin old behavior                          |
+|----------------------------|---------|---------|--------------------------------------------------|
+| `context_threshold`        | 0.75    | 0.35    | `LCM_CONTEXT_THRESHOLD=0.75`                     |
+| `fresh_tail_count`         | 64      | 32      | `LCM_FRESH_TAIL_COUNT=64`                        |
+| `incremental_max_depth`    | 1       | 3       | `LCM_INCREMENTAL_MAX_DEPTH=1` (leaf-only)        |
+
+The `incremental_max_depth` change is the most surprising: depth 3 enables
+hierarchical summarization (L1 → L2 → L3). With `condensation_fanin=4` you
+can condense up to 64 leaf summaries into a single root node. This is a
+deliberate change to reduce token cost on long sessions, but if you depend
+on the old leaf-only behavior, set the env var.
+
+The new `lcm.context_threshold` config key (in `~/.hermes/config.yaml`)
+takes priority over `compression.threshold` for LCM compaction. This lets
+operators tune LCM independently of the Hermes global compression setting.
 
 Usually no. Start with `LCM_CONTEXT_THRESHOLD`, `LCM_FRESH_TAIL_COUNT`, and large
 output externalization. Only tune leaf chunking after checking `lcm_status` and

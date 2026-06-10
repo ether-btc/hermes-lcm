@@ -817,6 +817,106 @@ class TestConfig:
 
         assert c.context_threshold == 0.55
 
+    def test_from_env_inf_threshold_falls_back_to_default(self, monkeypatch, tmp_path):
+        """H1 regression: lcm.context_threshold: inf in YAML must NOT propagate.
+
+        Without ``_safe_finite_float``, ``float('inf')`` succeeds and the
+        inf value reaches LCMConfig.context_threshold, silently disabling
+        the compaction trigger ``tokens > ctx * threshold``.
+        """
+        import math
+
+        import hermes_lcm.config as config_mod
+
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "lcm:\n  context_threshold: inf\n"
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.delenv("LCM_CONTEXT_THRESHOLD", raising=False)
+        monkeypatch.setattr(config_mod, "yaml", None)
+
+        c = LCMConfig.from_env()
+
+        assert c.context_threshold == 0.35, (
+            f"inf propagated as context_threshold={c.context_threshold!r}. "
+            "BUG: should fall back to default on non-finite values."
+        )
+        assert math.isfinite(c.context_threshold)
+
+    def test_from_env_nan_threshold_falls_back_to_default(self, monkeypatch, tmp_path):
+        """H1 regression: lcm.context_threshold: nan must NOT propagate.
+
+        nan is sneakier than inf: every comparison with nan is False, so
+        ``tokens > ctx * nan`` is always False and compaction never fires.
+        """
+        import math
+
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "lcm:\n  context_threshold: nan\n"
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.delenv("LCM_CONTEXT_THRESHOLD", raising=False)
+        import hermes_lcm.config as config_mod
+        monkeypatch.setattr(config_mod, "yaml", None)
+
+        c = LCMConfig.from_env()
+
+        assert c.context_threshold == 0.35, (
+            f"nan propagated as context_threshold={c.context_threshold!r}. "
+            "BUG: should fall back to default on non-finite values."
+        )
+        assert math.isfinite(c.context_threshold)
+
+    def test_from_env_lcm_lower_wins_over_compression_higher(self, monkeypatch, tmp_path):
+        """M1 regression: parser must NOT do a min() comparison by accident.
+
+        If lcm.context_threshold is set to a LOWER value than
+        compression.threshold, lcm's value should still win (lcm is the
+        more-specific override, regardless of magnitude).
+        """
+        import hermes_lcm.config as config_mod
+
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "lcm:\n  context_threshold: 0.20\n"
+            "compression:\n  enabled: true\n  threshold: 0.90\n"
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.delenv("LCM_CONTEXT_THRESHOLD", raising=False)
+        monkeypatch.setattr(config_mod, "yaml", None)
+
+        c = LCMConfig.from_env()
+
+        assert c.context_threshold == 0.20, (
+            f"got {c.context_threshold} — lcm should win even when lower"
+        )
+
+    def test_from_env_lcm_overrides_when_yaml_library_unavailable(self, monkeypatch, tmp_path):
+        """M1 regression: fallback parser path must also respect lcm > compression.
+
+        The branch added a yaml.safe_load test and a no-yaml test, but did
+        not test the case where pyyaml IS available AND the yaml-parsed
+        config has both lcm.context_threshold and compression.threshold.
+        This pins the contract.
+        """
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "lcm:\n  context_threshold: 0.30\n"
+            "compression:\n  enabled: true\n  threshold: 0.80\n"
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.delenv("LCM_CONTEXT_THRESHOLD", raising=False)
+
+        c = LCMConfig.from_env()
+
+        assert c.context_threshold == 0.30, f"got {c.context_threshold}"
+
 
 class TestSessionPatterns:
     def test_compile_pattern_wildcards(self):
