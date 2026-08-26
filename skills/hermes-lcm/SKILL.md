@@ -23,6 +23,7 @@ Reference map:
 - Recall tools and routing: `references/recall-tools.md`
 - `/new`, session continuity, and `/lcm rotate`: `references/session-lifecycle.md`
 - Canonical runtime recall policy: `references/recall-policy.md`
+- Silent truncation and summary health: `references/silent-truncation.md` (and `templates/drift-check-script.sh`)
 
 Working rules:
 
@@ -34,3 +35,5 @@ Working rules:
 - Do not treat open-cardinality results as complete without product-verifiable enumeration or coverage.
 - Use `lcm_compile_evidence` when a historical answer needs several named facets, exact operands, conflict handling, or latest-state selection; treat its semantic proposal as untrusted until the product returns validated evidence.
 - Keep default-off assertion, query-view, adaptive-retrieval, and destructive operator paths default-off unless the user explicitly asks to enable them.
+
+When summary health is the question (silent truncation, lossy compression, post-fix drift), load `references/silent-truncation.md` rather than reasoning from scratch. It distinguishes the two failure modes (parent-batch-compression timeout vs single-call large-input overflow) that both surface as `summary LIKE '%deterministic truncation%'` rows but require opposite fixes — timeout-raise vs input-budget-guard. The drift-check template is the canonical way to verify a Mode-A fix stayed fixed across sessions.
